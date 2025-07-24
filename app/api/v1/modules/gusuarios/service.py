@@ -4,7 +4,7 @@ from sqlalchemy import select
 from .models import GUsuarios
 from .schemas import GUsuariosCreate, GUsuariosUpdate
 
-class GUsuariosCRUD:
+class GUsuariosService:
     # Campos válidos para ordenamiento basados en el modelo
     VALID_ORDER_FIELDS = ["USUARIO", "NOMBRE", "NIVELSEG", "PUESTO", "LOGIN"]
     
@@ -65,4 +65,4 @@ class GUsuariosCRUD:
         return None
 
 # Instancia del CRUD
-gusuarios_crud = GUsuariosCRUD()
+gusuarios_service = GUsuariosService()

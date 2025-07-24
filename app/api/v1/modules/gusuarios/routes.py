@@ -2,7 +2,7 @@ from typing import List
 from fastapi import APIRouter, Depends, HTTPException, status
 from sqlalchemy.orm import Session
 from app.core.database import get_db
-from .crud import gusuarios_crud
+from .service import gusuarios_service
 from .schemas import GUsuarios, GUsuariosCreate, GUsuariosUpdate
 from .enums import GUsuariosOrderBy
 
@@ -19,7 +19,7 @@ def read_usuarios(
     db: Session = Depends(get_db)
 ):
     """Obtener usuarios con filtros opcionales"""
-    usuarios = gusuarios_crud.get(
+    usuarios = gusuarios_service.get(
         db, 
         usuario=usuario,
         skip=skip, 
@@ -44,13 +44,13 @@ def create_usuario(
 ):
     """Crear un nuevo usuario"""
     # Verificar si el usuario ya existe
-    usuarios_existentes = gusuarios_crud.get(db, usuario=usuario_in.USUARIO)
+    usuarios_existentes = gusuarios_service.get(db, usuario=usuario_in.USUARIO)
     if usuarios_existentes:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="El usuario ya existe"
         )
-    return gusuarios_crud.create(db, obj_in=usuario_in)
+    return gusuarios_service.create(db, obj_in=usuario_in)
 
 @router.put("/{usuario}", response_model=GUsuarios)
 def update_usuario(
@@ -59,13 +59,13 @@ def update_usuario(
     db: Session = Depends(get_db)
 ):
     """Actualizar un usuario"""
-    usuarios = gusuarios_crud.get(db, usuario=usuario)
+    usuarios = gusuarios_service.get(db, usuario=usuario)
     if not usuarios:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,
             detail="Usuario no encontrado"
         )
-    return gusuarios_crud.update(db, db_obj=usuarios[0], obj_in=usuario_in)
+    return gusuarios_service.update(db, db_obj=usuarios[0], obj_in=usuario_in)
 
 @router.delete("/{usuario}", response_model=GUsuarios)
 def delete_usuario(
@@ -73,7 +73,7 @@ def delete_usuario(
     db: Session = Depends(get_db)
 ):
     """Eliminar un usuario"""
-    db_usuario = gusuarios_crud.delete(db, usuario=usuario)
+    db_usuario = gusuarios_service.delete(db, usuario=usuario)
     if not db_usuario:
         raise HTTPException(
             status_code=status.HTTP_404_NOT_FOUND,

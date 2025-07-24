@@ -6,4 +6,3 @@ class GUsuariosOrderBy(str, Enum):
     NOMBRE = "NOMBRE"
     NIVELSEG = "NIVELSEG"
     PUESTO = "PUESTO"
-    LOGIN = "LOGIN"

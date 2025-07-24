@@ -2,7 +2,7 @@ from fastapi import FastAPI, HTTPException
 from sqlalchemy.exc import SQLAlchemyError
 from sqlalchemy import text
 from app.core.database import engine
-from app.utils.helpers import standard_response
+from app.utils.responses import standard_response
 from app.api.v1.router import api_router
 
 app = FastAPI(title="API con FastAPI y SQL Server", version="1.0.0")
