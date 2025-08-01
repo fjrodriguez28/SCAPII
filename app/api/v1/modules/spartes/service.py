@@ -1,6 +1,6 @@
 from typing import List, Optional
 from sqlalchemy.orm import Session
-from sqlalchemy import select
+from sqlalchemy import func, select
 from .models import SPartes
 from .schemas import SPartesCreate, SPartesUpdate
 
@@ -57,6 +57,13 @@ class SPartesService:
             db.commit()
             return db_obj
         return None
-
+    def count_all(self, db: Session, numero_parte: str = None) -> int:
+        """Count total number of partes, optionally filtered by numero_parte"""
+        query = select(func.count()).select_from(SPartes)
+        
+        if numero_parte:
+            query = query.where(SPartes.NUMPARTE == numero_parte)
+            
+        return db.scalar(query)
 # Instancia del CRUD
 spartes_service = SPartesService()

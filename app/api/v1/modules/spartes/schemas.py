@@ -13,7 +13,7 @@ class SPartesBase(BaseModel):
     CLASE: Optional[str] = Field(None, max_length=8,description="Clase de la parte")
     UNIMED: Optional[str] = Field(None,max_length=5,description="Unidad de medida")
     UNIMEDEQUIV: Optional[str] = Field(None,max_length=5,description="Unidad de medida equivalente")
-    FACTORCONV: Optional[Decimal] = Field(None, gt=0,description="Factor de conversión")
+    FACTORCONV: Optional[Decimal] = Field(None,description="Factor de conversión")
     COSTOUNITARIO: Optional[Decimal] = Field(None, ge=0,description="Costo unitario")
     TIPOMONEDA: Optional[str] = Field(None, max_length=2,description="Tipo de moneda")
     CLAVEMONEDA: Optional[str] = Field(None,max_length=3,description="Clave de moneda")
@@ -51,7 +51,7 @@ class SPartesBase(BaseModel):
     CANTPZXCJ: Optional[Decimal] = None
     VERSIONBILL: Optional[int] = None
     NUMPARTESUS: Optional[str] = Field(None, max_length=70, description="Número parte SUS")
-    ESREPARACION: Optional[Literal["SI", "NO"]] = Field(None,description="Es reparación: SI/NO (default: NO)")
+    ESREPARACION: Optional[Literal["Si", "No"]] = Field(None,description="Es reparación: SI/NO (default: NO)")
     COSTOUNITARIOREP: Optional[Decimal] = None
     USACANTALTERNA: Optional[int] = None
     FECHAMODBOM: Optional[int] = None
@@ -97,12 +97,12 @@ class SPartesBase(BaseModel):
     SIMBOLOEXCLIC: Optional[str] = Field(None, max_length=19, description="Símbolo exc lic")
     CAMPOOPCIONAL: Optional[str] = Field(None, max_length=800, description="Campo opcional")
     UNIMEDEQUIV2: Optional[str] = Field(None, max_length=5, description="UM equiv 2")
-    FACTORCONV2: Optional[Decimal] = Field(None, gt=0,description="Factor conversión 2")
+    FACTORCONV2: Optional[Decimal] = Field(None,description="Factor conversión 2")
     LABORCOST: Optional[Decimal] = None
     EXPORTCODE: Optional[str] = Field(None, max_length=2, description="Código exportación")
     LICENSECODE: Optional[str] = Field(None, max_length=3, description="Código licencia")
     CAMPOOPCIONALBOM: Optional[str] = Field(None, max_length=200, description="Campo opcional BOM")
-    TIPOPESO: Optional[Literal["KILOS", "LBS"]] = Field(None,description="Tipo peso: KILOS/LBS (default: KILOS)")
+    TIPOPESO: Optional[Literal["KILOS", "LIBRAS"]] = Field(None,description="Tipo peso: KILOS/LIBRAS (default: KILOS)")
     TIPOIMMEX: Optional[str] = Field(None, max_length=20, description="Tipo IMMEX")
     CLAVEFCC: Optional[str] = Field(None, max_length=30, description="Clave FCC")
     NUMPARTESCRAP: Optional[str] = Field(None, max_length=70, description="Número parte scrap")
@@ -133,7 +133,13 @@ class SPartesBase(BaseModel):
     IDENTIFICADOR: Optional[str] = Field(None, max_length=1000, description="Identificador")
     CONSECUTIVOAPHIS: Optional[int] = None        
 
-    # Validadores personalizados   
+   
+
+# Schema para crear la parte
+class SPartesCreate(SPartesBase):
+    NUMPARTE: str
+
+     # Validadores personalizados   
     @field_validator('NUMPARTE','NUMPARTEREF', 'DESCRIPCIONE', 'DESCRIPCIONI', 'FRACCIONAME', 'CLASE', 'UNIMED',  mode='before')
     def validate_trim_fields(cls, v):
         """Quitar espacios"""
@@ -201,10 +207,6 @@ class SPartesBase(BaseModel):
             except (ValueError, TypeError):
                 raise ValueError('Debe ser un número válido')
         return v
-
-# Schema para crear la parte
-class SPartesCreate(SPartesBase):
-    NUMPARTE: str
 
 # Schema para actualizar la parte
 class SPartesUpdate(SPartesBase):
