@@ -1,0 +1,29 @@
+# Dockerfile.celery
+FROM python:3.10-slim
+
+# Instala dependencias del sistema necesarias
+RUN apt-get update && apt-get install -y \
+    gcc \
+    g++ \
+    unixodbc-dev \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Copia primero los requirements para aprovechar la caché de Docker
+COPY requirements.txt .
+
+# Instala dependencias de Python
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copia el código de la aplicación
+COPY . .
+
+# Asegúrate de que los binarios de pip están en el PATH
+ENV PATH="/usr/local/bin:${PATH}"
+
+# Verifica la instalación de Celery
+RUN which celery && celery --version
+
+CMD ["celery", "-A", "app.core.celery.celery_app", "worker", "--loglevel=info"]
