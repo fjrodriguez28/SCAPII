@@ -1,0 +1,76 @@
+# Dockerfile.celery
+FROM python:3.11-slim
+
+# Evitar prompts interactivos
+ENV DEBIAN_FRONTEND=noninteractive
+
+# Variables de entorno para Python
+ENV PYTHONUNBUFFERED=1
+ENV PYTHONDONTWRITEBYTECODE=1
+ENV PYTHONPATH=/app
+
+# Instalar dependencias del sistema
+RUN apt-get update && apt-get install -y \
+    curl \
+    gnupg \
+    apt-transport-https \
+    gcc \
+    g++ \
+    python3-dev \
+    unixodbc \
+    unixodbc-dev \
+    telnet \
+    iputils-ping \
+    netcat-openbsd \
+    && rm -rf /var/lib/apt/lists/*
+
+WORKDIR /app
+
+# Agregar repositorio de Microsoft y instalar driver ODBC
+RUN curl -fsSL https://packages.microsoft.com/keys/microsoft.asc | gpg --dearmor -o /usr/share/keyrings/microsoft-prod.gpg \
+    && echo "deb [arch=amd64,arm64,armhf signed-by=/usr/share/keyrings/microsoft-prod.gpg] https://packages.microsoft.com/debian/12/prod bookworm main" > /etc/apt/sources.list.d/mssql-release.list
+
+# Instalar driver ODBC para SQL Server
+RUN apt-get update \
+    && ACCEPT_EULA=Y apt-get install -y \
+        msodbcsql17 \
+        mssql-tools \
+    && rm -rf /var/lib/apt/lists/*
+
+# Agregar herramientas de SQL Server al PATH
+ENV PATH="$PATH:/opt/mssql-tools/bin"
+
+# Copiar y instalar dependencias de Python
+COPY requirements.txt .
+RUN pip install --no-cache-dir --upgrade pip && \
+    pip install --no-cache-dir -r requirements.txt
+
+# Copiar código de la aplicación
+COPY . .
+
+# Crear script de entrada para verificar conectividad
+RUN echo '#!/bin/bash\n\
+echo "=== Verificando conectividad ==="\n\
+echo "Hostname: $(hostname)"\n\
+echo "IP: $(hostname -I)"\n\
+\n\
+# Verificar que Redis esté disponible\n\
+echo "Verificando conexión a Redis..."\n\
+until nc -z redis 6379; do\n\
+    echo "Esperando Redis..."\n\
+    sleep 2\n\
+done\n\
+echo "Redis disponible"\n\
+\n\
+# Verificar instalación de Celery\n\
+echo "Verificando Celery..."\n\
+celery --version\n\
+\n\
+echo "=== Iniciando Celery Worker ==="\n\
+exec "$@"' > /entrypoint.sh && chmod +x /entrypoint.sh
+
+# Configurar punto de entrada
+ENTRYPOINT ["/entrypoint.sh"]
+
+# Comando por defecto
+CMD ["celery", "-A", "app.core.celery.celery_app", "worker", "--loglevel=info", "--concurrency=2"]
