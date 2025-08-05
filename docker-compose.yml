@@ -1,4 +1,5 @@
 version: '3.8'
+
 services:
   redis:
     image: redis:alpine
@@ -14,12 +15,26 @@ services:
     environment:
       - CELERY_BROKER_URL=redis://redis:6379/0
       - CELERY_RESULT_BACKEND=redis://redis:6379/0
+      # Variables adicionales para debugging
+      - PYTHONUNBUFFERED=1
+      - CELERY_LOG_LEVEL=INFO
     depends_on:
       - redis
     volumes:
       - .:/app
-    # Solución alternativa: ejecuta el comando a través de un shell
-    command: ["sh", "-c", "celery -A app.core.celery.celery_app worker --loglevel=info"]
+    
+    # CLAVE: Acceso al host Windows
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    
+    # Comando con verificación de conectividad
+    command: [
+      "sh", "-c", 
+      "echo 'Verificando conectividad...' && 
+       ping -c 2 host.docker.internal || echo 'Ping falló pero continuando...' && 
+       echo 'Iniciando Celery Worker...' && 
+       celery -A app.core.celery.celery_app worker --loglevel=info"
+    ]
 
 volumes:
   redis-data:

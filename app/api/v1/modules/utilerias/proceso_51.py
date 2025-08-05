@@ -9,11 +9,14 @@ from app.models.task import TaskStatus
 from sqlalchemy.orm import sessionmaker
 from typing import Dict, Any
 from sqlalchemy.exc import SQLAlchemyError, DBAPIError
-from app.core.database import get_db
+from app.core.database import get_db, create_unified_engine, test_connection, parse_sqlalchemy_error
 from datetime import datetime
 import re
 from sqlalchemy.orm import Session
 from sqlalchemy import create_engine, text
+import logging
+
+logger = logging.getLogger(__name__)
 router = APIRouter(tags=["proceso_51"])
 
 @router.post("/transfer", response_model=TransferTaskResponse, status_code=202)
@@ -22,9 +25,40 @@ async def create_transfer_task(
     background_tasks: BackgroundTasks,
     db: Session = Depends(get_db)
 ):
+    """Crear tarea de transferencia con validación previa de conexiones"""
+    
     # Validación básica
     if not request.tables:
         raise HTTPException(status_code=400, detail="Debe especificar al menos una tabla")
+    
+    # Validar conexiones antes de crear la tarea
+    logger.info("Validando conexiones antes de crear tarea...")
+    
+    # Probar conexión origen
+    source_test = test_connection(request.source.model_dump())
+    if not source_test["success"]:
+        raise HTTPException(
+            status_code=400, 
+            detail={
+                "message": "Error conectando a base de datos origen",
+                "error": source_test["error"],
+                "server": source_test["server"]
+            }
+        )
+    
+    # Probar conexión destino
+    target_test = test_connection(request.target.model_dump())
+    if not target_test["success"]:
+        raise HTTPException(
+            status_code=400, 
+            detail={
+                "message": "Error conectando a base de datos destino", 
+                "error": target_test["error"],
+                "server": target_test["server"]
+            }
+        )
+    
+    logger.info("Conexiones validadas exitosamente")
     
     # Crear registro en base de datos
     task_record = TaskStatus(
@@ -38,8 +72,10 @@ async def create_transfer_task(
     
     # Iniciar tarea asíncrona con Celery
     try:
-        celery_task = start_transfer.delay(request.dict(), task_record.id)
+        celery_task = start_transfer.delay(request.model_dump(), task_record.id)
+        logger.info(f"Tarea Celery creada: {celery_task.id}")
     except Exception as e:
+        logger.error(f"Error iniciando tarea Celery: {str(e)}")
         db.delete(task_record)
         db.commit()
         raise HTTPException(
@@ -59,119 +95,194 @@ async def create_transfer_task(
             "tables_count": len(request.tables),
             "tables": [t.source_table for t in request.tables],
             "chunk_size": request.chunk_size,
-            "db_task_id": task_record.id
+            "db_task_id": task_record.id,
+            "source_server": f"{request.source.server}:{request.source.port}",
+            "target_server": f"{request.target.server}:{request.target.port}"
         },
         created_at=datetime.now()
     )
 
-from app.core.database import SessionLocal, create_db_engine,create_temp_engine, get_db
-def create_temp_engine2(config: dict):
-    """Crea un motor temporal usando SQLAlchemy"""
-    conn_str = (
-        f"mssql+pyodbc://{config['username']}:{config['password']}"
-        f"@{config['server']}:{config['port']}/{config['database']}"
-        "?driver=ODBC+Driver+17+for+SQL+Server"
-    )
-    
-    return create_engine(conn_str, pool_pre_ping=True, connect_args={
-        "timeout": 10,
-        "login_timeout": 5
-    })
-
-@router.post("/test-connection-sqlalchemy")
-async def test_db_connection_sqlalchemy(request: DatabaseTestRequest):
-    """Endpoint para probar conexión usando SQLAlchemy con consulta personalizada"""
+@router.post("/test-connection")
+async def test_database_connection(request: DatabaseTestRequest):
+    """Endpoint mejorado para probar conexión usando la función unificada"""
     try:
-        # Crear motor temporal
-        engine = create_db_engine(request.model_dump())
+        logger.info(f"Probando conexión a {request.server}:{request.port}/{request.database}")
         
-        # Usar la consulta de prueba del request
+        # Usar función unificada para crear engine
+        engine = create_unified_engine(request.model_dump())
+        
+        # Probar con la consulta personalizada
         test_query = request.test_query
         
-        # Probar conexión directamente con el motor
+        # Ejecutar consulta con timeout
         with engine.connect() as connection:
             result = connection.execute(text(test_query))
             
-            # Si la consulta devuelve resultados, los tomamos
+            # Procesar resultados
             if result.returns_rows:
                 rows = result.fetchall()
-                columns = result.keys()
+                columns = list(result.keys())
                 
-                # Convertir resultados a formato JSON
+                # Convertir a formato JSON (limitar resultados para evitar respuestas muy grandes)
                 result_data = [
                     {column: value for column, value in zip(columns, row)}
-                    for row in rows
+                    for row in rows[:100]  # Limitar a 100 filas
                 ]
+                
+                if len(rows) > 100:
+                    result_data.append({"_note": f"Se muestran las primeras 100 filas de {len(rows)} total"})
             else:
-                result_data = {"message": "Query executed successfully"}
+                result_data = {"message": "Query executed successfully", "rows_affected": result.rowcount}
+        
+        # Limpiar recursos
+        engine.dispose()
         
         return {
             "success": True,
             "message": "Conexión exitosa",
+            "server": f"{request.server}:{request.port}",
+            "database": request.database,
             "query": test_query,
-            "result": result_data
+            "result": result_data,
+            "connection_test": "PASSED"
         }
+        
     except (SQLAlchemyError, DBAPIError) as e:
         error_info = parse_sqlalchemy_error(e)
+        logger.error(f"Error de conexión SQL: {error_info}")
         raise HTTPException(status_code=400, detail=error_info)
     except Exception as e:
+        logger.error(f"Error inesperado: {str(e)}")
         raise HTTPException(status_code=500, detail={
             "success": False,
             "message": f"Error inesperado: {str(e)}",
-            "type": "unexpected_error"
+            "type": "unexpected_error",
+            "connection_test": "FAILED"
         })
 
-def parse_sqlalchemy_error(e: Exception) -> Dict[str, Any]:
-    """Analiza errores de SQLAlchemy para dar información detallada"""
+@router.post("/validate-transfer-config")
+async def validate_transfer_config(request: TransferRequest):
+    """Validar configuración de transferencia sin ejecutarla"""
     try:
-        if isinstance(e, DBAPIError):
-            orig_error = e.orig
-            error_info = {
-                "success": False,
-                "message": str(orig_error),
-                "type": "DBAPIError",
-                "code": getattr(orig_error, 'args', [None])[0],
-                "sqlstate": getattr(orig_error, 'args', [None, None])[1]
-            }
-        else:
-            error_info = {
-                "success": False,
-                "message": str(e),
-                "type": type(e).__name__
-            }
+        validation_results = {
+            "valid": True,
+            "source_connection": None,
+            "target_connection": None,
+            "tables_validation": [],
+            "warnings": [],
+            "errors": []
+        }
         
-        # Detectar errores comunes
-        message = error_info["message"].lower()
-        if "invalid column name" in message:
-            error_info["diagnosis"] = "Columna inválida en la consulta"
-        elif "invalid object name" in message:
-            error_info["diagnosis"] = "Tabla o vista no encontrada"
-        elif "incorrect syntax" in message:
-            error_info["diagnosis"] = "Error de sintaxis SQL"
-        elif "permission denied" in message:
-            error_info["diagnosis"] = "Permisos insuficientes"
-        elif "adaptive server is unavailable" in message:
-            error_info["diagnosis"] = "El servidor no está disponible"
-        elif "login failed" in message:
-            error_info["diagnosis"] = "Credenciales inválidas"
-        elif "could not open a connection" in message:
-            error_info["diagnosis"] = "Problemas de red o firewall"
-        elif "odbc driver" in message:
-            error_info["diagnosis"] = "Driver ODBC no instalado"
-        elif "connection string" in message:
-            error_info["diagnosis"] = "Cadena de conexión inválida"
+        # Validar conexión origen
+        source_test = test_connection(request.source.model_dump())
+        validation_results["source_connection"] = source_test
+        if not source_test["success"]:
+            validation_results["valid"] = False
+            validation_results["errors"].append(f"Conexión origen falló: {source_test['error']['message']}")
         
-        # Detectar errores específicos de MSSQL
-        if "18456" in error_info.get("code", ""):
-            error_info["diagnosis"] = "Error de autenticación"
-            state_match = re.search(r"State: (\d+)", error_info["message"])
-            if state_match:
-                error_info["diagnosis"] += f" (Estado: {state_match.group(1)})"
+        # Validar conexión destino
+        target_test = test_connection(request.target.model_dump())
+        validation_results["target_connection"] = target_test
+        if not target_test["success"]:
+            validation_results["valid"] = False
+            validation_results["errors"].append(f"Conexión destino falló: {target_test['error']['message']}")
         
-        return error_info
-    except Exception as parse_error:
+        # Si las conexiones funcionan, validar tablas
+        if source_test["success"] and target_test["success"]:
+            source_engine = create_unified_engine(request.source.model_dump())
+            target_engine = create_unified_engine(request.target.model_dump())
+            
+            try:
+                for table_config in request.tables:
+                    table_validation = {
+                        "table": table_config.source_table,
+                        "exists_in_source": False,
+                        "exists_in_target": False,
+                        "estimated_rows": 0,
+                        "warnings": []
+                    }
+                    
+                    # Verificar existencia en origen
+                    try:
+                        with source_engine.connect() as conn:
+                            result = conn.execute(text(f"SELECT COUNT(*) FROM {table_config.source_table}"))
+                            table_validation["estimated_rows"] = result.scalar()
+                            table_validation["exists_in_source"] = True
+                    except Exception as e:
+                        table_validation["warnings"].append(f"Error verificando tabla origen: {str(e)}")
+                    
+                    # Verificar existencia en destino
+                    target_table = table_config.target_table or table_config.source_table
+                    try:
+                        with target_engine.connect() as conn:
+                            conn.execute(text(f"SELECT TOP 1 * FROM {target_table}"))
+                            table_validation["exists_in_target"] = True
+                    except Exception as e:
+                        table_validation["warnings"].append(f"Tabla destino podría no existir: {str(e)}")
+                    
+                    validation_results["tables_validation"].append(table_validation)
+                
+            finally:
+                source_engine.dispose()
+                target_engine.dispose()
+        
+        return validation_results
+        
+    except Exception as e:
+        logger.error(f"Error en validación: {str(e)}")
+        raise HTTPException(status_code=500, detail={
+            "valid": False,
+            "error": f"Error durante validación: {str(e)}"
+        })
+
+@router.get("/connection-diagnostics")
+async def connection_diagnostics():
+    """Endpoint para diagnosticar problemas de conectividad"""
+    diagnostics = {
+        "timestamp": datetime.now().isoformat(),
+        "system_info": {},
+        "network_tests": {},
+        "recommendations": []
+    }
+    
+    try:
+        import platform
+        import socket
+        
+        # Información del sistema
+        diagnostics["system_info"] = {
+            "platform": platform.platform(),
+            "python_version": platform.python_version(),
+            "hostname": socket.gethostname(),
+            "container_check": "Docker container detected" if "/.dockerenv" in str(platform.platform()) else "Native environment"
+        }
+        
+        # Pruebas de red básicas
+        try:
+            # Probar conectividad a puertos comunes de SQL Server
+            common_ports = [1433, 1434]
+            for port in common_ports:
+                try:
+                    sock = socket.create_connection(("host.docker.internal", port), timeout=5)
+                    sock.close()
+                    diagnostics["network_tests"][f"port_{port}"] = "OPEN"
+                except:
+                    diagnostics["network_tests"][f"port_{port}"] = "CLOSED/FILTERED"
+        except Exception as e:
+            diagnostics["network_tests"]["error"] = str(e)
+        
+        # Recomendaciones
+        diagnostics["recommendations"] = [
+            "Verificar que SQL Server esté configurado para aceptar conexiones TCP/IP",
+            "Confirmar que el puerto 1433 esté abierto en el firewall",
+            "Validar que las credenciales sean correctas",
+            "Comprobar la configuración de red del contenedor Docker"
+        ]
+        
+        return diagnostics
+        
+    except Exception as e:
         return {
-            "success": False,
-            "message": f"Error original: {str(e)} | Error en parseo: {str(parse_error)}",
-            "type": "parse_error"
+            "error": f"Error generando diagnósticos: {str(e)}",
+            "timestamp": datetime.now().isoformat()
         }
